@@ -140,6 +140,7 @@ async def download_pdf(url, session) -> bytes:
 
 
 def extract_text_from_pdf(pdf_content: bytes) -> str:
+    
     """
     Opens the inputted pdf and reads its bytes into text.
 
