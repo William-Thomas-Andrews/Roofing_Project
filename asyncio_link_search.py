@@ -8,10 +8,9 @@ import os
 import re
 import importlib.util
 import fitz
-from typing import Tuple
+from typing import Tuple, List, Dict
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-
 
 DOMAINS = ['coopercity.gov', 'coopercityfl.org']
 
@@ -32,9 +31,11 @@ results_dict = dict()
 
 target_dict = dict()
 
+old_structure = {'Broward': {'COOPER CITY': {}}}
+new_structure = {'Broward': {'COOPER CITY': {}}}
+
 
 async def fetch(url: str, session: ClientSession) -> str:
-
     """
     Fetch a URL and return the response content.
 
@@ -54,14 +55,13 @@ async def fetch(url: str, session: ClientSession) -> str:
     try:
         async with session.get(url) as response:
             return await response.text()
-        
+
     except Exception as e:
         print(f"Failed to fetch {url}: {e}")
         return ""
 
 
 def extract_links(html: str, base_url: str) -> set:
-
     """
     Extracts links from a webpage html.
 
@@ -77,8 +77,8 @@ def extract_links(html: str, base_url: str) -> set:
     set
         A set of all links found on the page.
     """
-    
-    soup = BeautifulSoup(html, 'html.parser')    
+
+    soup = BeautifulSoup(html, 'html.parser')
     links = set()
 
     for a_tag in soup.find_all('a', href=True):
@@ -91,19 +91,18 @@ def extract_links(html: str, base_url: str) -> set:
 
 
 def filter_pdf_links(links: set) -> set:
-
     """
     Filters the links to be only pdf links.
 
     Paramters
     ---------
     links : set
-        The links we got.
+        The links we received.
 
     Returns
     -------
     set
-        Only the pdfs in the inputted set of links.
+        The pdfs within the links we received.
     """
 
     # pdf_links = {link for link in links if link.lower().endswith('.pdf')}
@@ -118,8 +117,18 @@ def filter_pdf_links(links: set) -> set:
 
 
 async def download_pdf(url, session) -> bytes:
-
     """
+    Executes the download_pdf and extract_text_from_pdf functions asyncronously and formats the text results.
+
+    Parameters
+    ----------
+    url : str
+        The pdf link about to be searched.
+
+    Returns
+    -------
+    Tuple[str, str]
+        A tuple of a link and its respective pdf content.
     """
 
     async with session.get(url) as response:
@@ -128,9 +137,22 @@ async def download_pdf(url, session) -> bytes:
             return await response.read()
         else:
             raise Exception(f"Failed to download PDF from {url}")
-        
 
-def extract_text_from_pdf(pdf_content : bytes) -> str:
+
+def extract_text_from_pdf(pdf_content: bytes) -> str:
+    """
+    Opens the inputted pdf and reads its bytes into text.
+
+    Parameters
+    ----------
+    pdf_content : bytes
+        The pdf link about to be searched.
+
+    Returns
+    -------
+    str
+        A string of the read pdf content.
+    """
 
     doc = fitz.open(stream=pdf_content, filetype="pdf")
     text = ""
@@ -141,33 +163,45 @@ def extract_text_from_pdf(pdf_content : bytes) -> str:
     return text
 
 
-# async def process_pdf(url, session):
-
-#     try:
-#         pdf_content = await download_pdf(url, session)
-#         extracted_text = extract_text_from_pdf(pdf_content)
-#         results_dict['Broward']['COOPER CITY'][]
-#         pdf_json = json.dumps({"url": url, "content": extracted_text})
-#         return pdf_json
-    
-#     except Exception as e:
-#         print(f"Error processing {url}: {e}")
-#         return None
-    
-
 async def process_pdf(url: str, session: ClientSession) -> Tuple[str, str]:
+    """
+    Executes the download_pdf and extract_text_from_pdf functions asyncronously and formats the text results.
+
+    Parameters
+    ----------
+    url : str
+        The pdf link about to be searched.
+
+    Returns
+    -------
+    Tuple[str, str]
+        A tuple of a link and its respective pdf content.
+    """
 
     try:
         pdf_content = await download_pdf(url, session)
         text = extract_text_from_pdf(pdf_content)
         return url, text
-    
+
     except Exception as e:
         print(f"Error processing {url}: {e}")
         return None, None
-    
 
-async def download_and_process_pdfs(pdf_links):
+
+async def download_and_process_pdfs(pdf_links: List[str]) -> List[Tuple[str, str]]:
+    """
+    Executes the process_pdf function asyncronously and formats the results.
+
+    Parameters
+    ----------
+    pdf_links : List[str]
+        The pdf links about to be searched.
+
+    Returns
+    -------
+    List[Tuple[str, str]]
+        A list of the tuples of links and their respective pdfs.
+    """
 
     async with aiohttp.ClientSession() as session:
         tasks = [process_pdf(link, session) for link in pdf_links]
@@ -175,15 +209,42 @@ async def download_and_process_pdfs(pdf_links):
         return [pdf for pdf in pdfs if pdf[0] is not None]
 
 
-def custom_preprocessor(text):
+def custom_preprocessor(text: str) -> str:
+    """
+    Remove punctuation and special characters.
 
-    # Remove punctuation and special characters
+    Parameters
+    ----------
+    text : str
+        The text about to be filtered.
+
+    Returns
+    -------
+    str
+        The filtered text.
+    """
+
     text = re.sub(r'[^\w\s]', '', text)
 
     return text
 
 
-def calculate_cosine_similarity(text1, text2):
+def calculate_cosine_similarity(text1: str, text2: str) -> float:
+    """
+    Calculates cosine similarity scores between two strings.
+
+    Parameters
+    ----------
+    text1 : str
+        The first piece of text.
+    text2 : str
+        The second piece of text.
+
+    Returns
+    -------
+    float
+        A score from 0.0 to 1.0 of how closely matched the text is (0.0 being none, and 1.0 being an exact match).
+    """
 
     vectorizer = TfidfVectorizer(preprocessor=custom_preprocessor)
     vectors = vectorizer.fit_transform([text1, text2]).toarray()
@@ -192,7 +253,6 @@ def calculate_cosine_similarity(text1, text2):
 
 
 async def crawl(url: str, session: ClientSession, depth: int) -> set:
-
     """
     Function to crawl a given depth.
 
@@ -216,7 +276,7 @@ async def crawl(url: str, session: ClientSession, depth: int) -> set:
     all_pdfs = set()
 
     for current_depth in range(depth):
-        tasks = [] # possibly expand to be faster later - instead of 1 wave of tasks waiting upon completion and running concurrently for each depth, we could run all n-depths concurrently. However, this may interfere with the whole idea of depth.
+        tasks = []  # possibly expand to be faster later - instead of 1 wave of tasks waiting upon completion and running concurrently for each depth, we could run all n-depths concurrently. However, this may interfere with the whole idea of depth.
         new_links = set()
         print(f"Current depth: {current_depth}, now searching {len(to_visit)} links")
         for link in to_visit:
@@ -238,20 +298,19 @@ async def crawl(url: str, session: ClientSession, depth: int) -> set:
     return all_pdfs
 
 
-def build_old_structure(pdf_data, county, city):
-
+def build_old_structure(pdf_data: List[Tuple[str, str]], county: str, city: str) -> None:
     """
-    Updates the global new_structure dictionary with PDF data for the given county and city.
-    
+    Updates the old_structure dictionary globally with pdf data for the given county and city.
+
     Parameters
     ----------
-    pdf_data : list of tuples
-        List of (url, text) tuples representing the PDF data.
+    pdf_data : List[Tuple[str, str]]
+        List of (url, text) tuples representing the pdf data.
     county : str
         The county name.
     city : str
         The city name.
-    
+
     Returns
     -------
     None
@@ -260,31 +319,30 @@ def build_old_structure(pdf_data, county, city):
     # Ensure the county entry exists
     if county not in old_structure:
         old_structure[county] = {}
-    
+
     # Ensure the city entry exists within the county
     if city not in old_structure[county]:
         old_structure[county][city] = {}
-    
+
     for url, text in pdf_data:
         old_structure[county][city][url] = text
 
     return None
 
 
-def build_new_structure(pdf_data, county, city):
-
+def build_new_structure(pdf_data: List[Tuple[str, str]], county: str, city: str) -> None:
     """
-    Updates the global new_structure dictionary with PDF data for the given county and city.
-    
+    Updates the new_structure dictionary globally with pdf data for the given county and city.
+
     Parameters
     ----------
-    pdf_data : list of tuples
-        List of (url, text) tuples representing the PDF data.
+    pdf_data : List[Tuple[str, str]]
+        List of (url, text) tuples representing the pdf data.
     county : str
         The county name.
     city : str
         The city name.
-    
+
     Returns
     -------
     None
@@ -293,7 +351,7 @@ def build_new_structure(pdf_data, county, city):
     # Ensure the county entry exists
     if county not in new_structure:
         new_structure[county] = {}
-    
+
     # Ensure the city entry exists within the county
     if city not in new_structure[county]:
         new_structure[county][city] = {}
@@ -304,10 +362,33 @@ def build_new_structure(pdf_data, county, city):
     return None
 
 
-def compare_structures(old_structure, new_structure, threshold=0.9, county = None, city = None):
+def compare_structures(old_structure: Dict[str, Dict[str, Dict[str, str]]],
+                       new_structure: Dict[str, Dict[str, Dict[str, str]]], threshold=0.95, county=None,
+                       city=None) -> list:
+    """
+    Updates the new_structure dictionary globally with pdf data for the given county and city.
+
+    Parameters
+    ----------
+    old_structure : Dict[str,Dict[str,Dict[str,str]]]
+        The dictionary for target pdfs.
+    new_structure : Dict[str,Dict[str,Dict[str,str]]]
+        The dictionary for result pdfs.
+    threshold : int
+        The threshold of similarity tolerance.
+    county : str
+        This iteration's county.
+    city : str
+        This iteration's city.
+
+    Returns
+    -------
+    list
+        The number of pdf content matches.
+    """
 
     differences = []
-    # print(old_structure)
+
     old_texts = [text for text in old_structure[county][city].values()]
     new_texts = [text for text in new_structure[county][city].values()]
 
@@ -316,13 +397,6 @@ def compare_structures(old_structure, new_structure, threshold=0.9, county = Non
             similarity = calculate_cosine_similarity(old_text, new_text)
             if similarity > threshold:
                 differences.append(1)
-    # for old_text, new_text in zip(old_texts, new_texts):
-    #     # if old_text == new_text
-    #     similarity = calculate_cosine_similarity(old_text, new_text)
-    #     if similarity > threshold:
-    #         # differences.append((old_text, new_text, similarity))
-    #         differences.append(1)
-    ## /\ can be changed
 
     return differences
 
@@ -355,7 +429,7 @@ def compare_structures(old_structure, new_structure, threshold=0.9, county = Non
 #                         results_dict[county][municipality] = results['website'][0]['url']
 #                     except:
 #                         pass
-        
+
 #                     ## Creating the target_dict
 
 
@@ -366,9 +440,6 @@ def compare_structures(old_structure, new_structure, threshold=0.9, county = Non
 #                         target_dict[county][municipality] = None
 #                     except:
 #                         pass
-
-
-
 
 #     # print(results_dict['Broward']['COOPER CITY'])
 
@@ -382,71 +453,22 @@ def compare_structures(old_structure, new_structure, threshold=0.9, county = Non
 #     # print(target_dict)
 
 #     return None
-    
-
-# def adjustments():
-
-#     results_dict['COOPER CITY'] = 
 
 
-# async def main(url: str, depth: int):
-
-#     """
-#     Main function to run the crawl.
-
-#     Parameters
-#     ----------
-#     url : str
-#         Starting url.
-#     depth : int
-#         Search depth.
-
-#     Returns
-#     -------
-#     None
-#         This function does not return anything.
-#     """
-
-#     async with aiohttp.ClientSession() as session:
-#         pdf_links = await crawl(url, session, depth)
-#         tasks = [process_pdf(link, session) for link in pdf_links]
-#         pdf_json_strings = await asyncio.gather(*tasks)
-#         pdf_json_strings = [pdf_json for pdf_json in pdf_json_strings if pdf_json is not None]
-#         print(pdf_json_strings[0][0:10])
-#         # for pdf_json in pdf_json_strings:
-#         #     print(pdf_json)
-
-#     # create_dicts()
-
-
-# async def main(old_pdf_links, new_pdf_links, county, city):
-
-#     old_pdfs = await download_and_process_pdfs(old_pdf_links)
-#     new_pdfs = await download_and_process_pdfs(new_pdf_links)
-
-#     old_structure = build_structure(old_pdfs, county, city)
-#     new_structure = build_structure(new_pdfs, county, city)
-
-#     differences = compare_structures(old_structure, new_structure, threshold=0.9)
-
-#     for diff in differences:
-#         print(f"PDF has changed with cosine similarity: {diff[2]}")
-#         # Optionally, you can print or handle the differences here
-
-
-old_structure = {'Broward': {'COOPER CITY': {}}}
-new_structure = {'Broward': {'COOPER CITY': {}}}
-
-
-async def main(url: str, old_pdf_links : list, county : str, city : str, depth: int):
-
+async def main(url: str, old_pdf_links: list, county: str, city: str, depth: int) -> None:
     """
-    Main function to run the crawl.
+    Main function.
 
     Parameters
     ----------
     url : str
         Starting url.
+    olf_pdf_links : list
+        Target pdfs.
+    county : str
+        County for this iteration (i.e. 'Broward').
+    city : str
+        City for this iteration (i.e. 'COOPER CITY').
     depth : int
         Search depth.
 
@@ -472,12 +494,10 @@ async def main(url: str, old_pdf_links : list, county : str, city : str, depth: 
 
     print(len(new_pdfs))
 
-
-    
     build_old_structure(old_pdfs, county, city)
     build_new_structure(new_pdfs, county, city)
 
-    differences = compare_structures(old_structure, new_structure, threshold=0.95, county = county, city = city)
+    differences = compare_structures(old_structure, new_structure, threshold=0.95, county=county, city=city)
 
     # for diff in differences:
     #     print(f"PDF has changed with cosine similarity: {diff[2]}")
@@ -492,34 +512,16 @@ async def main(url: str, old_pdf_links : list, county : str, city : str, depth: 
     # create_dicts()
 
 
-
-
 if __name__ == '__main__':
-
     url = 'https://coopercity.gov/'
-    # urls= 'https://coopercity.gov/?SEC={AD7C348E-C110-425A-B91C-2CA5769BF937}'
-    # start_url = 'http://example.com'  # Replace with your starting URL
-    # depth = 1
-    # asyncio.run(main(urls, depth))
-    old_pdf_links = ['https://coopercity.gov/vertical/sites/%7B6B555694-E6ED-4811-95F9-68AA3BD0A2FF%7D/uploads/2022_STORM_SHUTTER_AFFIDAVIT_FILLABLE(1).pdf', 'https://coopercity.gov/vertical/sites/%7B6B555694-E6ED-4811-95F9-68AA3BD0A2FF%7D/uploads/Affidavit_-_Hurricane_Mitigation_2023.pdf']
+    old_pdf_links = [
+        'https://coopercity.gov/vertical/sites/%7B6B555694-E6ED-4811-95F9-68AA3BD0A2FF%7D/uploads/2022_STORM_SHUTTER_AFFIDAVIT_FILLABLE(1).pdf',
+        'https://coopercity.gov/vertical/sites/%7B6B555694-E6ED-4811-95F9-68AA3BD0A2FF%7D/uploads/Affidavit_-_Hurricane_Mitigation_2023.pdf']
     county = 'Broward'
     city = 'COOPER CITY'
     depth = 2
-
-    # Run the asynchronous function
-    asyncio.run(main(url = url, old_pdf_links = old_pdf_links, county = county, city = city, depth = depth))
+    asyncio.run(main(url=url, old_pdf_links=old_pdf_links, county=county, city=city, depth=depth))
     # list_no_repeats = list(set(total_pdfs))
     # print(list_no_repeats)
     # print(len(list_no_repeats))
-    # create_dicts()
 
-
-## Understand the new pdf processing code. Get all the pdf json data into the dict, and also if needed, change the form of the json data that has already
-## been downloaded by creating a new roofing folder and doing the new process with the better pdf processing. Get both dicts and implement the comparison code.
-## Also probably before implementation but after thorough understanding, put typehints and make it clean.
-
-## use pikepdf concurrently? Well the gpt suggestion seems to work better
-
-## I think the code segments the pdfs into pages. It may be better to just put it into string.
-
-## Once the process works for Cooper City, then automate to all municipalities, and then do a docker sql database or whatever. Rob Mulla has a good video on that.
